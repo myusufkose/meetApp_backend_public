@@ -1,0 +1,16 @@
+{
+  "name": "meetapp",
+  "version": "1.0.0",
+  "description": "MeetApp - A social meeting application",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "meetapp",
+    "social",
+    "meeting"
+  ],
+  "author": "",
+  "license": "ISC"
+}
