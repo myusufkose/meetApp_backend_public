@@ -1,7 +1,7 @@
 from bson.json_util import dumps
 import pymongo
 from exceptions import DatabaseError, NotFoundError, DuplicateError
-from pymongo.errors import DuplicateKeyError
+from pymongo.errors import DuplicateKeyError, ConnectionFailure
 from typing import Optional, List, Dict, Any
 from bson import ObjectId
 import os
@@ -15,7 +15,7 @@ class Database:
     def __init__(self):
         try:
             # MongoDB bağlantı URL'ini environment variable'dan al
-            connection_string = os.getenv("MONGODB_URL")
+            connection_string = "os.getenv("MONGODB_URL")"
             if not connection_string:
                 raise DatabaseError("MONGODB_URL environment variable is not set")
             myclient = pymongo.MongoClient(connection_string)
@@ -24,7 +24,7 @@ class Database:
             from Database.chat_db import ChatDatabase
             self.chat_db = ChatDatabase(self.db)
             self.activities = self.db["activities"]
-        except pymongo.errors.ConnectionError as e:
+        except ConnectionFailure as e:
             raise DatabaseError(f"Veritabanına bağlanılamadı: {str(e)}")
         except Exception as e:
             raise DatabaseError(f"Beklenmeyen bir hata oluştu: {str(e)}")
