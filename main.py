@@ -7,7 +7,6 @@ from fastapi.encoders import jsonable_encoder
 from bson import ObjectId
 from routers import users, activities, chat, websocket
 from auth import auth
-from auth.auth import sign_jwt
 from exceptions import DatabaseError, AuthenticationError, ValidationError, NotFoundError, DuplicateError
 from error_handler import (
     validation_exception_handler,
@@ -18,7 +17,7 @@ from error_handler import (
     pymongo_exception_handler,
     generic_exception_handler
 )
-from Database.database import Database
+from Database.Db import Database
 from datetime import datetime
 import json
 import uvicorn
@@ -93,10 +92,6 @@ async def startup_event():
         init_manager(db)
         print("WebSocket manager başlatıldı")
         
-        # Chat router'ı başlat
-        from routers.chat import init_chat_router
-        init_chat_router(db)
-        print("Chat router başlatıldı")
         
     except Exception as e:
         print(f"Başlatma hatası: {str(e)}")
@@ -127,5 +122,3 @@ def signal_handler(sig, frame):
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
-if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)

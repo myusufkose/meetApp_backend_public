@@ -5,14 +5,14 @@ import uuid
 import datetime
 from auth.auth import verify_password, get_password_hash, create_access_token
 from utils import get_user_details
-from Database.database import Database
-from models.model import UserLoginSchema as UserLogin, UserSchema as UserSignup
+from Database.User_db import UserDB
+from models.User_Models import User_Login_Model, User_Create_Model
 
 router = APIRouter()
-db = Database()
+db = UserDB()
 
 @router.post("/login", tags=["auth"])
-async def login(user: UserLogin):
+async def login(user: User_Login_Model):
     try:
         # Kullanıcıyı bul
         user_data = None

@@ -1,90 +1,40 @@
-from fastapi import HTTPException
-from Database.database import Database
+from typing import Dict, Any, Optional
+from bson import ObjectId
 
-def get_user_details(user_id: str, db: Database) -> dict:
+def get_user_details(user_id: str, db) -> Dict[str, Any]:
     """
-    Kullanıcının detaylı bilgilerini getirir.
-    
-    Args:
-        user_id (str): Kullanıcı ID'si
-        db: Veritabanı nesnesi
-        
-    Returns:
-        dict: Kullanıcı detayları
-        
-    Raises:
-        HTTPException: Kullanıcı bulunamazsa veya başka bir hata oluşursa
+    Kullanıcı detaylarını getirir
     """
     try:
-        # Kullanıcıyı bul
-        user_data = None
         users = db.get_all_users()
         for user in users:
-            if user["user_id"] == user_id:
-                user_data = user
-                break
-        
-        if not user_data:
-            raise HTTPException(
-                status_code=404,
-                detail="Kullanıcı bulunamadı"
-            )
-            
-        # Arkadaş listesini al
-        friends_list = user_data.get("friends", [])
-        
-        # Arkadaşların detaylı bilgilerini topla
-        friends_details = []
-        for friend_id in friends_list:
-            for user in users:
-                if user["user_id"] == friend_id:
-                    friends_details.append({
-                        "user_id": user["user_id"],
-                        "full_name": user.get("full_name", ""),
-                        "email": user["email"]
-                    })
-                    break
-        
-        # Gönderilen isteklerin detaylarını topla
-        sent_requests_details = []
-        for request_id in user_data.get("sent_requests", []):
-            for user in users:
-                if user["user_id"] == request_id:
-                    sent_requests_details.append({
-                        "user_id": user["user_id"],
-                        "full_name": user.get("full_name", ""),
-                        "email": user["email"]
-                    })
-                    break
-        
-        # Alınan isteklerin detaylarını topla
-        received_requests_details = []
-        for request_id in user_data.get("received_requests", []):
-            for user in users:
-                if user["user_id"] == request_id:
-                    received_requests_details.append({
-                        "user_id": user["user_id"],
-                        "full_name": user.get("full_name", ""),
-                        "email": user["email"]
-                    })
-                    break
-        
-        # Kullanıcı aktivitelerini getir
-        user_activities = db.get_user_activities(user_id)
-        
-        return {
-            "user_id": user_data["user_id"],
-            "email": user_data["email"],
-            "full_name": user_data.get("full_name", ""),
-            "friends": friends_details,
-            "sent_requests": sent_requests_details,
-            "received_requests": received_requests_details,
-            "activities": user_activities
-        }
-    except HTTPException:
-        raise
+            if user.get("user_id") == user_id and not user.get("is_deleted", False):
+                # Hassas bilgileri çıkar
+                user_details = {
+                    "user_id": user.get("user_id"),
+                    "email": user.get("email"),
+                    "full_name": user.get("full_name"),
+                    "friends": user.get("friends", []),
+                    "sent_requests": user.get("sent_requests", []),
+                    "received_requests": user.get("received_requests", []),
+                    "activities": user.get("activities", []),
+                    "created_at": user.get("created_at")
+                }
+                return user_details
+        return None
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Kullanıcı bilgileri getirilirken hata oluştu: {str(e)}"
-        ) 
+        raise Exception(f"Kullanıcı detayları getirilirken hata oluştu: {str(e)}")
+
+
+def _convert_to_json(data):
+        """
+        MongoDB'den gelen verileri JSON'a dönüştürür.
+        ObjectId'leri string'e çevirir.
+        """
+        if isinstance(data, list):
+            return [_convert_to_json(item) for item in data]
+        elif isinstance(data, dict):
+            return {key: _convert_to_json(value) for key, value in data.items()}
+        elif isinstance(data, ObjectId):
+            return str(data)
+        return data

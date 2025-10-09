@@ -1,84 +1,58 @@
 from fastapi import APIRouter, HTTPException, Depends, status, Query
 from typing import List, Optional
-from models.chat import CreateNewChat, Chat, Message
-from Database.chat_db import ChatDatabase
+from models.Chat_models import CreateNewChat, Chat, Message
+from Database.Chat_db import ChatDatabase
 from auth.auth_bearer import JWTBearer
-from Database.user_db import UserDB
-from Database.database import Database
+from Database.User_db import UserDB
 from auth.auth import decode_jwt
 from pydantic import BaseModel
-import jwt
 from jwt.exceptions import PyJWTError
-from Database.database import DatabaseError
+from exceptions import DatabaseError
 from websocket_manager import get_manager
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
-# Global database instance'ları
-db = None
-chat_db = None
-user_db = None
+chat_db = ChatDatabase()
+user_db = UserDB()
 
-def init_chat_router(database):
-    global db, chat_db, user_db
-    db = database
-    chat_db = db.chat_db
-    user_db = db.user_db
 
-class ChatMessagesResponse(BaseModel):
-    messages: List[Message]
-    last_message: Optional[Message] = None
-    total_messages: int
 
 @router.post("/", response_model=Chat)
-async def create_chat(chat_data: CreateNewChat, token: str = Depends(JWTBearer())):
+async def create_chat(chat_data: CreateNewChat, current_user: dict = Depends(JWTBearer())):
     """
     Yeni bir chat oluştur
     """
     try:
-        # Token'ı doğrula ve payload'ı al
-        payload = decode_jwt(token)
-        if not payload:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Geçersiz token"
-            )
-
         # Token'dan user_id'yi al
-        user_id = payload.get("user_id")
+        user_id = current_user.get("user_id") if current_user else None
         if not user_id:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Geçersiz token"
             )
 
-        # Kullanıcıların var olduğunu kontrol et ve katılımcı bilgilerini al
-        participants_info = []
-        for user_id_ in chat_data.participants:
-            user = user_db.get_user_by_id(user_id_)
-            if not user:
-                raise HTTPException(status_code=404, detail=f"Kullanıcı bulunamadı: {user_id_}")
-            
-            # Katılımcı bilgilerini ekle
-            participants_info.append({
-                "user_id": user_id_,
-                "full_name": user.get("full_name", "Kullanıcı"),
-                "profile_picture": user.get("profile_picture", "/default-avatar.png")
-            })
-
-        # Kullanıcının katılımcılar arasında olup olmadığını kontrol et
-        if user_id not in chat_data.participants:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Kullanıcı katılımcılar arasında değil"
-            )
-
+        # Oluşturan kullanıcıyı katılımcı listesine ekle (participants boş/None olsa bile)
+        participants = chat_data.participants or []
+        if user_id not in participants:
+            participants = [user_id] + participants
+        chat_data.participants = participants
+        # Katılımcıların varlığını tek sorguda doğrula ve temel bilgilerini hazırla
+        valid_user_ids = set(user_db.get_all_active_user_ids())
+        invalid_ids = [uid for uid in chat_data.participants if uid not in valid_user_ids]
+        if invalid_ids:
+            raise HTTPException(status_code=404, detail=f"Kullanıcı bulunamadı: {', '.join(invalid_ids)}")
+        if(chat_data.is_group):
+            if(len(chat_data.participants) < 2):
+                raise HTTPException(status_code=400, detail="Grup sohbeti için en az 2 kişi gereklidir")
+            if(chat_data.group_name is None):
+                raise HTTPException(status_code=400, detail="Grup sohbeti için grup adı gereklidir")
+            if(chat_data.group_name == ""):
+                raise HTTPException(status_code=400, detail="Grup sohbeti için grup adı gereklidir")
+            if(chat_data.group_name == " "):
+                raise HTTPException(status_code=400, detail="Grup sohbeti için grup adı gereklidir")
         # Chat'i oluştur
         chat = chat_db.create_chat(chat_data)
-        
-        # Katılımcı bilgilerini ekle
-        chat.participants_info = participants_info
-        
+
         # Diğer katılımcılara WebSocket üzerinden bildirim gönder
         manager = get_manager()
         if manager:
@@ -95,24 +69,15 @@ async def create_chat(chat_data: CreateNewChat, token: str = Depends(JWTBearer()
         )
 
 @router.get("/", response_model=List[Chat])
-async def get_user_chats(token: str = Depends(JWTBearer())):
+async def get_user_chats(current_user: dict = Depends(JWTBearer())):
     """
     Kullanıcının tüm chat'lerini getir
     """
     try:
         print(f"\n=== get_user_chats endpoint başladı ===")
         
-        # Token'ı doğrula ve payload'ı al
-        payload = decode_jwt(token)
-        if not payload:
-            print("Geçersiz token")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Geçersiz token"
-            )
-
         # Token'dan user_id'yi al
-        user_id = payload.get("user_id")
+        user_id = current_user.get("user_id") if current_user else None
         if not user_id:
             print("Token'da user_id yok")
             raise HTTPException(
@@ -148,7 +113,7 @@ async def get_user_chats(token: str = Depends(JWTBearer())):
                     })
                 else:
                     print(f"Katılımcı bulunamadı: {participant_id}")
-            chat.participants_info = participants_info
+            # Chat modeli dışında ek alan eklemiyoruz
             
             # Son mesajı kontrol et ve dönüştür
             if chat.last_message:
@@ -173,7 +138,7 @@ async def get_user_chats(token: str = Depends(JWTBearer())):
         raise HTTPException(status_code=500, detail="Could not retrieve chat list")
 
 @router.get("/with-recent-messages", response_model=List[Chat])
-async def get_user_chats_with_recent_messages(token: str = Depends(JWTBearer())):
+async def get_user_chats_with_recent_messages(current_user: dict = Depends(JWTBearer())):
     """
     Kullanıcının tüm sohbetlerini getirir.
     Son 5 sohbetin son 30 mesajını da içerir.
@@ -181,17 +146,8 @@ async def get_user_chats_with_recent_messages(token: str = Depends(JWTBearer()))
     try:
         print(f"\n=== get_user_chats_with_recent_messages endpoint başladı ===")
         
-        # Token'ı doğrula ve payload'ı al
-        payload = decode_jwt(token)
-        if not payload:
-            print("Geçersiz token")
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Geçersiz token"
-            )
-
         # Token'dan user_id'yi al
-        user_id = payload.get("user_id")
+        user_id = current_user.get("user_id") if current_user else None
         if not user_id:
             print("Token'da user_id yok")
             raise HTTPException(
@@ -228,7 +184,7 @@ async def get_user_chats_with_recent_messages(token: str = Depends(JWTBearer()))
                     })
                 else:
                     print(f"Katılımcı bulunamadı: {participant_id}")
-            chat.participants_info = participants_info
+            # Chat modeli dışında ek alan eklemiyoruz
         
         print("=== get_user_chats_with_recent_messages endpoint bitti ===\n")
         return chats
@@ -246,27 +202,19 @@ async def get_user_chats_with_recent_messages(token: str = Depends(JWTBearer()))
         print(f"Stack trace: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail="Could not retrieve chat list")
 
-@router.get("/{chat_id}/messages", response_model=ChatMessagesResponse)
+@router.get("/{chat_id}/messages")
 async def get_chat_messages(
     chat_id: str,
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
-    token: str = Depends(JWTBearer())
+    current_user: dict = Depends(JWTBearer())
 ):
     """
     Belirli bir chat'in mesajlarını getir
     """
     try:
-        # Token'ı doğrula ve payload'ı al
-        payload = decode_jwt(token)
-        if not payload:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Geçersiz token"
-            )
-
         # Token'dan user_id'yi al
-        user_id = payload.get("user_id")
+        user_id = current_user.get("user_id") if current_user else None
         if not user_id:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -312,21 +260,13 @@ async def get_chat_messages(
         )
 
 @router.delete("/{chat_id}/messages/{message_id}")
-async def delete_message(chat_id: str, message_id: str, token: str = Depends(JWTBearer())):
+async def delete_message(chat_id: str, message_id: str, current_user: dict = Depends(JWTBearer())):
     """
     Mesajı sil
     """
     try:
-        # Token'ı doğrula ve payload'ı al
-        payload = decode_jwt(token)
-        if not payload:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Geçersiz token"
-            )
-
         # Token'dan user_id'yi al
-        user_id = payload.get("user_id")
+        user_id = current_user.get("user_id") if current_user else None
         if not user_id:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -352,21 +292,13 @@ async def delete_message(chat_id: str, message_id: str, token: str = Depends(JWT
         )
 
 @router.put("/{chat_id}/messages/{message_id}")
-async def edit_message(chat_id: str, message_id: str, content: str, token: str = Depends(JWTBearer())):
+async def edit_message(chat_id: str, message_id: str, content: str, current_user: dict = Depends(JWTBearer())):
     """
     Mesajı düzenle
     """
     try:
-        # Token'ı doğrula ve payload'ı al
-        payload = decode_jwt(token)
-        if not payload:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Geçersiz token"
-            )
-
         # Token'dan user_id'yi al
-        user_id = payload.get("user_id")
+        user_id = current_user.get("user_id") if current_user else None
         if not user_id:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -392,21 +324,13 @@ async def edit_message(chat_id: str, message_id: str, content: str, token: str =
         )
 
 @router.put("/{chat_id}/messages/{message_id}/read")
-async def mark_message_as_read(chat_id: str, message_id: str, token: str = Depends(JWTBearer())):
+async def mark_message_as_read(chat_id: str, message_id: str, current_user: dict = Depends(JWTBearer())):
     """
     Mesajı okundu olarak işaretle
     """
     try:
-        # Token'ı doğrula ve payload'ı al
-        payload = decode_jwt(token)
-        if not payload:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Geçersiz token"
-            )
-
         # Token'dan user_id'yi al
-        user_id = payload.get("user_id")
+        user_id = current_user.get("user_id") if current_user else None
         if not user_id:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,

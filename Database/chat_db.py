@@ -1,144 +1,58 @@
 from typing import List, Optional
-from models.chat import Chat, Message, CreateNewChat
+from models.Chat_models import Chat, Message, CreateNewChat
 from exceptions import DatabaseError
 from datetime import datetime
 from pymongo import MongoClient
+from Database.Db import Database
+import uuid
 
 class ChatDatabase:
-    def __init__(self, db):
-        print("\n=== ChatDatabase başlatılıyor ===")
-        self.chats = db["chats"]
-        self.messages = db["messages"]
-        self.db = db
-        print(f"chats ve messages koleksiyonları seçildi")
-        
-        # chats koleksiyonundaki toplam doküman sayısını göster
-        total_chats = self.chats.count_documents({})
-        print(f"\nToplam chat sayısı: {total_chats}")
-        
-        # Örnek bir chat göster
-        if total_chats > 0:
-            sample_chat = self.chats.find_one()
-            print(f"\nÖrnek chat:")
-            print(f"Chat ID: {sample_chat.get('chat_id')}")
-            print(f"Katılımcılar: {sample_chat.get('participants')}")
-        
-        print("=== ChatDatabase başlatma tamamlandı ===\n")
-
-    def __del__(self):
-        try:
-            if hasattr(self, 'client'):
-                self.client.close()
-        except Exception as e:
-            print(f"Veritabanı bağlantı kapatma hatası: {str(e)}")
+    def __init__(self):
+        self.chats = Database().db["chats"]
+        self.messages = Database().db["messages"]
+        self.db = Database().db
 
     def create_chat(self, chat_data: CreateNewChat) -> Chat:
-        """
-        Yeni bir chat oluştur
-        """
         try:
-            # Chat nesnesini oluştur
+            # Zorunlu alanları doldurarak Chat nesnesini oluştur
+            participants = chat_data.participants or []
+            # İlk katılımcıyı (kurucu) admin yap
+            group_admin_ids = [participants[0]] if (chat_data.is_group and participants) else []
+
             chat = Chat(
-                participants=chat_data.participants,
+                chat_id=f"chat_{uuid.uuid4().hex[:8]}",
+                messages=[],
+                participants=participants,
+                created_at=datetime.now(),
+                updated_at=datetime.now(),
                 is_group=chat_data.is_group,
                 group_name=chat_data.group_name,
-                group_admin=chat_data.group_admin,
-                messages=[],
-                created_at=datetime.now().isoformat(),
-                updated_at=datetime.now().isoformat(),
+                group_photo_url=None,
+                group_description=None,
+                group_admin_ids=group_admin_ids,
                 is_active=True
             )
-
-            # Katılımcı bilgilerini al
-            participants_info = []
-            for user_id in chat_data.participants:
-                user = self.db["users"].find_one({"user_id": user_id})
-                if user:
-                    participants_info.append({
-                        "user_id": user_id,
-                        "full_name": user.get("full_name", "Kullanıcı"),
-                        "profile_picture": user.get("profile_picture", "/default-avatar.png")
-                    })
-            
-            # Katılımcı bilgilerini ekle
-            chat.participants_info = participants_info
-
             # MongoDB'ye ekle
-            self.chats.insert_one(chat.dict())
+            self.chats.insert_one(chat.model_dump())
             return chat
         except Exception as e:
             raise DatabaseError(f"Chat oluşturma hatası: {str(e)}")
 
     def get_chat_by_id(self, chat_id: str) -> Optional[Chat]:
-        """
-        Chat ID'sine göre chat'i getir
-        """
         try:
-            # Chat ve son mesajını tek sorguda getir
-            pipeline = [
-                {"$match": {
-                    "chat_id": chat_id,
-                    "is_active": True
-                }},
-                {"$lookup": {
-                    "from": "messages",
-                    "let": {"chat_id": "$chat_id"},
-                    "pipeline": [
-                        {"$match": {
-                            "$expr": {"$eq": ["$chat_id", "$$chat_id"]}
-                        }},
-                        {"$sort": {"timestamp": -1}},
-                        {"$limit": 1}
-                    ],
-                    "as": "last_message"
-                }},
-                {"$unwind": {
-                    "path": "$last_message",
-                    "preserveNullAndEmptyArrays": True
-                }},
-                {"$addFields": {
-                    "last_message": {
-                        "$cond": {
-                            "if": {"$eq": ["$last_message", None]},
-                            "then": None,
-                            "else": {
-                                "message_id": "$last_message.message_id",
-                                "chat_id": "$last_message.chat_id",
-                                "sender_id": "$last_message.sender_id",
-                                "content": "$last_message.content",
-                                "timestamp": "$last_message.timestamp",
-                                "status": "$last_message.status"
-                            }
-                        }
-                    }
-                }},
-                {"$project": {
-                    "_id": 0,  # _id alanını hariç tut
-                    "chat_id": 1,
-                    "participants": 1,
-                    "is_group": 1,
-                    "group_name": 1,
-                    "group_admin": 1,
-                    "messages": 1,
-                    "last_message": 1,
-                    "created_at": 1,
-                    "updated_at": 1,
-                    "is_active": 1,
-                    "unread_count": 1
-                }}
-            ]
-            
-            chat_data = self.chats.aggregate(pipeline).next()
+            chat_data = self.chats.find_one(
+                {"chat_id": chat_id},{"_id": 0}
+            )
             if chat_data:
+                # is_active alanı yoksa True olarak kabul et
+                if "is_active" not in chat_data:
+                    chat_data["is_active"] = True
                 return Chat(**chat_data)
             return None
         except Exception as e:
             raise DatabaseError(f"Chat getirme hatası: {str(e)}")
 
     def add_message(self, chat_id: str, message: Message):
-        """
-        Chat'e yeni mesaj ekle
-        """
         try:
             self.messages.insert_one(message.dict())
             self.chats.update_one(
@@ -297,8 +211,7 @@ class ChatDatabase:
             # Chat'leri ve son mesajlarını tek sorguda getir
             pipeline = [
                 {"$match": {
-                    "participants": user_id,
-                    "is_active": True
+                    "participants": user_id
                 }},
                 {"$lookup": {
                     "from": "messages",
@@ -322,7 +235,7 @@ class ChatDatabase:
             print(f"\nPipeline: {pipeline}")
             
             # Önce basit bir sorgu ile chat'leri kontrol et
-            simple_query = {"participants": user_id, "is_active": True}
+            simple_query = {"participants": user_id}
             print(f"\nBasit sorgu sonucu:")
             simple_result = list(self.chats.find(simple_query))
             print(f"Bulunan chat sayısı: {len(simple_result)}")
@@ -334,16 +247,25 @@ class ChatDatabase:
             for chat_data in self.chats.aggregate(pipeline):
                 print(f"\nChat verisi: {chat_data}")
                 
+                # is_active kontrolü - eğer False ise atla
+                is_active = chat_data.get("is_active", True)
+                if not is_active:
+                    print(f"Chat {chat_data['chat_id']} aktif değil, atlanıyor")
+                    continue
+                
                 # Chat nesnesini oluştur
                 chat = Chat(
                     chat_id=chat_data["chat_id"],
+                    messages=chat_data.get("messages", []),
                     participants=chat_data["participants"],
                     is_group=chat_data.get("is_group", False),
                     group_name=chat_data.get("group_name"),
-                    group_admin=chat_data.get("group_admin"),
+                    group_photo_url=chat_data.get("group_photo_url"),
+                    group_description=chat_data.get("group_description"),
+                    group_admin_ids=chat_data.get("group_admin_ids", []),
                     created_at=chat_data["created_at"],
                     updated_at=chat_data["updated_at"],
-                    is_active=chat_data["is_active"]
+                    is_active=is_active
                 )
                 
                 print(f"Oluşturulan chat nesnesi: {chat.dict()}")
@@ -778,8 +700,7 @@ class ChatDatabase:
             # Önce kullanıcının tüm sohbetlerini al
             pipeline = [
                 {"$match": {
-                    "participants": user_id,
-                    "is_active": True
+                    "participants": user_id
                 }},
                 {"$sort": {"updated_at": -1}}  # En son güncellenen sohbetler önce
             ]
@@ -813,22 +734,30 @@ class ChatDatabase:
             # Chat nesnelerini oluştur
             chats = []
             for chat_data in all_chats:
+                # is_active kontrolü - eğer False ise atla
+                is_active = chat_data.get("is_active", True)
+                if not is_active:
+                    print(f"Chat {chat_data['chat_id']} aktif değil, atlanıyor")
+                    continue
+                
                 chat = Chat(
                     chat_id=chat_data["chat_id"],
+                    messages=chat_data.get("messages", []),
                     participants=chat_data["participants"],
                     is_group=chat_data.get("is_group", False),
                     group_name=chat_data.get("group_name"),
-                    group_admin=chat_data.get("group_admin"),
+                    group_photo_url=chat_data.get("group_photo_url"),
+                    group_description=chat_data.get("group_description"),
+                    group_admin_ids=chat_data.get("group_admin_ids", []),
                     created_at=chat_data["created_at"],
                     updated_at=chat_data["updated_at"],
-                    is_active=chat_data["is_active"]
+                    is_active=is_active
                 )
                 
                 # Son mesajı ekle
                 if "messages" in chat_data and chat_data["messages"]:
                     chat.last_message = Message(
                         message_id=chat_data["messages"][0]["message_id"],
-                        chat_id=chat_data["chat_id"],
                         sender_id=chat_data["messages"][0]["sender_id"],
                         content=chat_data["messages"][0]["content"],
                         timestamp=chat_data["messages"][0]["timestamp"],
@@ -844,7 +773,6 @@ class ChatDatabase:
                     if last_message:
                         chat.last_message = Message(
                             message_id=last_message["message_id"],
-                            chat_id=last_message["chat_id"],
                             sender_id=last_message["sender_id"],
                             content=last_message["content"],
                             timestamp=last_message["timestamp"],
@@ -853,7 +781,16 @@ class ChatDatabase:
                 
                 # Son 5 sohbet için mesajları ekle
                 if chat_data in recent_chats and "messages" in chat_data:
-                    chat.messages = [Message(**msg) for msg in chat_data["messages"]]
+                    chat.messages = []
+                    for msg in chat_data["messages"]:
+                        message = Message(
+                            message_id=msg["message_id"],
+                            sender_id=msg["sender_id"],
+                            content=msg["content"],
+                            timestamp=msg["timestamp"],
+                            status=msg.get("status", {})
+                        )
+                        chat.messages.append(message)
                 
                 chats.append(chat)
             

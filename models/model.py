@@ -18,33 +18,6 @@ class PostSchema(BaseModel):
             }
         }
 
-class UserSchema(BaseModel):
-    email: EmailStr
-    password: str
-    full_name: str
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "full_name": "Abdulazeez Abdulazeez Adeshina",
-                "email": "abdulazeez@x.com",
-                "password": "weakpassword"
-            }
-        }
-
-
-class UserLoginSchema(BaseModel):
-    email: EmailStr
-    password: str
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "email": "abdulazeez@x.com",
-                "password": "weakpassword"
-            }
-        }
-
 
 class ActivitySchema(BaseModel):
     activity_id: Optional[str] = None  # Optional because it's generated on creation
@@ -108,4 +81,5 @@ class ActivityResponseSchema(BaseModel):
                 "created_at": "2024-03-20T10:00:00+03:00"
             }
         }
+
 

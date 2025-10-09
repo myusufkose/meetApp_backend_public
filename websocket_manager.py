@@ -1,7 +1,7 @@
 from fastapi import WebSocket
 from typing import Dict, List
 import asyncio
-from models.chat import Message, MessageContent, MessageStatus
+from Database.Chat_db import ChatDatabase
 from datetime import datetime
 import json
 import uuid
@@ -11,7 +11,7 @@ class ConnectionManager:
         # Kullanıcı ID'sine göre websocket bağlantılarını tutar
         self.active_connections: Dict[str, WebSocket] = {}
         self.user_rooms: Dict[str, List[str]] = {}
-        self.chat_db = db.chat_db
+        self.chat_db = ChatDatabase()
 
     async def connect(self, websocket: WebSocket, user_id: str):
         # Yeni bağlantıyı kabul et ve kaydet
@@ -33,6 +33,24 @@ class ConnectionManager:
         if user_id in self.active_connections:
             await self.active_connections[user_id].send_json(message)
             print(f"Kişisel mesaj gönderildi: {message}")
+
+    async def send_notification(self, user_id: str, notification_type: str, data: dict):
+        """
+        Kullanıcıya bildirim gönder
+        """
+        try:
+            notification = {
+                "type": "notification",
+                "notification_type": notification_type,
+                "data": data,
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            await self.send_personal_message(notification, user_id)
+            print(f"Bildirim gönderildi: {notification}")
+            
+        except Exception as e:
+            print(f"Bildirim gönderme hatası: {str(e)}")
 
     
     async def handle_read_receipt(self, chat_id: str, message_id: str, user_id: str):
@@ -77,16 +95,38 @@ class ConnectionManager:
             print(f"Gelen mesaj: {message}")
             
             # Mesaj içeriğini doğrula
-            if not all(k in message for k in ["chat_id", "content", "sender_id", "timestamp"]):
+            if not all(k in message for k in ["chat_id", "content", "sender_id"]):
                 raise ValueError("Geçersiz mesaj formatı")
+
+            # Chat'in varlığını ve erişimi doğrula
+            chat = self.chat_db.get_chat_by_id(message["chat_id"])
+            if not chat:
+                await self.send_personal_message(
+                    {"type": "error", "message": "Chat bulunamadı", "chat_id": message["chat_id"]},
+                    message["sender_id"]
+                )
+                print("Chat bulunamadı, mesaj işlenmedi")
+                return
+            if message["sender_id"] not in chat.participants:
+                await self.send_personal_message(
+                    {"type": "error", "message": "Chat erişim reddedildi", "chat_id": message["chat_id"]},
+                    message["sender_id"]
+                )
+                print("Gönderen chat katılımcısı değil, mesaj işlenmedi")
+                return
 
             # Mesaj içeriğini düzenle
             content = message["content"]
-            if content["type"] == "text":
+            # Eğer content string ise, text formatına çevir
+            if isinstance(content, str):
                 content = {
                     "type": "text",
-                    "text": content["text"],
-                    "content": content["text"]  # text mesajları için content de text olmalı
+                    "text": content
+                }
+            elif isinstance(content, dict) and content.get("type") == "text":
+                content = {
+                    "type": "text",
+                    "text": content.get("text", "")
                 }
             
             # Mesajı oluştur
@@ -95,7 +135,7 @@ class ConnectionManager:
                 "chat_id": message["chat_id"],
                 "sender_id": message["sender_id"],
                 "content": content,
-                "timestamp": message["timestamp"],
+                "timestamp": datetime.now().isoformat(),
                 "status": {
                     "read_by": [],
                     "delivered_to": []
@@ -112,7 +152,6 @@ class ConnectionManager:
             print("Mesaj veritabanına kaydedildi")
 
             # Mesajı chat katılımcılarına gönder
-            chat = self.chat_db.get_chat_by_id(message["chat_id"])
             if chat:
                 print(f"Chat bulundu: {chat.dict()}")
                 print(f"Katılımcılar: {chat.participants}")
@@ -128,7 +167,7 @@ class ConnectionManager:
                             "chat_id": new_message["chat_id"],
                             "sender_id": new_message["sender_id"],
                             "content": new_message["content"],
-                            "timestamp": new_message["timestamp"],
+                            "timestamp": datetime.now().isoformat(),
                             "status": new_message["status"]
                         }
                     }
