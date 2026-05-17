@@ -6,8 +6,10 @@ from typing import Optional, List, Dict, Any
 from bson import ObjectId
 import datetime
 from Database.Db import Database
-from models import User_Models
-from models.User_Models import Friend_Request_Model
+from models.UserModels.GeneralUserModels import Detailed_User_Model
+from models.UserModels.GeneralUserModels import Friend_Request_Model
+from models.UserModels.GeneralUserModels import User_Profile_Model
+from models.UserModels.GeneralUserModels import friend_Model
 from utils import _convert_to_json
 class UserDB:
     def __init__(self):
@@ -51,20 +53,16 @@ class UserDB:
         except Exception as e:
             raise DatabaseError(f"Kullanıcı araması sırasında hata oluştu: {str(e)}")
 
-    def get_user_friends(self, user_email: str) -> List[Dict[str, Any]]:
+    def get_user_friends(self, user: Dict[str, Any]) -> List[Dict[str, Any]]:
         try:
-            # Önce kullanıcıyı bul ve arkadaş listesini al
-            user = self.users.find_one(
-                {"email": user_email, "is_deleted": {"$ne": True}},
-                {"friends": 1}
-            )
-            
-            if not user or not user.get("friends"):
-                return []
-            
             # Arkadaşların bilgilerini tek sorguda getir
+            # Boş liste kontrolü ekle
+            friends_list = user["friends"]
+            if not friends_list:
+                return []
+                
             friends = list(self.users.find({
-                "user_id": {"$in": user["friends"]},
+                "user_id": {"$in": friends_list},
                 "is_deleted": {"$ne": True}
             }, {
                 "_id": 0,
@@ -81,7 +79,7 @@ class UserDB:
     def get_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
         try:
             # Sadece silinmemiş kullanıcıları getir
-            user = self.users.find_one({"email": email, "is_deleted": {"$ne": True}}, {"_id": 0})
+            user = self.users.find_one({"email": email, "is_deleted": {"$ne": True}}, {"_id": 0, "password_hash": 0})
             return _convert_to_json(user) if user else None
         except Exception as e:
             raise DatabaseError(f"Kullanıcı getirilirken hata oluştu: {str(e)}")
@@ -182,3 +180,42 @@ class UserDB:
             return True
         except Exception as e:
             raise DatabaseError(f"Arkadaş isteği eklenirken hata oluştu: {str(e)}") 
+
+    def get_detailed_user_by_email(self, email: str) -> Optional[Dict[str, Any]]:
+        try:
+            user = self.users.find_one({"email": email, "is_deleted": {"$ne": True}}, {"_id": 0, "password_hash": 0})
+            user["friends"] = self.get_user_friends(user)
+            return _convert_to_json(user) if user else None
+        except Exception as e:
+            raise DatabaseError(f"Kullanıcı getirilirken hata oluştu: {str(e)}")
+
+    def get_user_profile(self, user_id: str) -> Optional[User_Profile_Model]:
+        try:
+            user = self.users.find_one({"user_id": user_id, "is_deleted": {"$ne": True}}, {"_id": 0, "password_hash": 0})
+            if not user:
+                return None
+            
+            # Arkadaş bilgilerini getir
+            friends_data = self.get_user_friends(user)
+            
+            # Arkadaş verilerini friend_Model objelerine dönüştür
+            friends_models = []
+            for friend in friends_data:
+                friends_models.append(friend_Model(
+                    user_id=friend["user_id"],
+                    name=friend["name"],
+                    email=friend["email"],
+                    profile_picture=friend.get("profile_picture", "")
+                ))
+            
+            # User_Profile_Model oluştur
+            profile = User_Profile_Model(
+                user_id=user["user_id"],
+                name=user["name"],
+                profile_picture=user.get("profile_picture", ""),
+                friends=friends_models
+            )
+            
+            return profile
+        except Exception as e:
+            raise DatabaseError(f"Kullanıcı profili getirilirken hata oluştu: {str(e)}")

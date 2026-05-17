@@ -29,19 +29,30 @@ class User_Model(BaseModel):
     updated_at: datetime = Field(default_factory=datetime.now)
     is_deleted: bool = False
      
-class User_Create_Model(BaseModel):
+class friend_Model(BaseModel):
+    user_id: str
     name: str
     email: str
-    password: str
     profile_picture: Optional[str] = ""
-    
-class User_Login_Model(BaseModel):
+
+class Detailed_User_Model(BaseModel):
+    """
+    Detailed User Model for user profile
+    """
+    user_id: str
+    name: str
     email: str
-    password: str
-    
-class Friend_Request_Data_Model(BaseModel):
-    from_user_id: str
-    to_user_id: str
-    status: Friend_Request_Status = Friend_Request_Status.PENDING
+    profile_picture: Optional[str] = ""
+    friends: List[friend_Model] = []
+    friend_requests_sent: List[Friend_Request_Model] = []
+    friend_requests_received: List[Friend_Request_Model] = []
+    friend_requests_rejected: List[Friend_Request_Model] = []
     created_at: datetime = Field(default_factory=datetime.now)
-    
+    updated_at: datetime = Field(default_factory=datetime.now)
+
+
+class User_Profile_Model(BaseModel):
+    user_id: str
+    name: str
+    profile_picture: Optional[str] = ""
+    friends: List[friend_Model] = []

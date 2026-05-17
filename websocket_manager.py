@@ -117,17 +117,17 @@ class ConnectionManager:
 
             # Mesaj içeriğini düzenle
             content = message["content"]
-            # Eğer content string ise, text formatına çevir
-            if isinstance(content, str):
-                content = {
-                    "type": "text",
-                    "text": content
-                }
-            elif isinstance(content, dict) and content.get("type") == "text":
-                content = {
-                    "type": "text",
-                    "text": content.get("text", "")
-                }
+            # Content'i string formatına çevir
+            if isinstance(content, dict):
+                # Eğer content dictionary ise, text kısmını al
+                if content.get("type") == "text":
+                    content = content.get("text", "")
+                else:
+                    # Diğer medya tipleri için content'i string'e çevir
+                    content = str(content)
+            elif not isinstance(content, str):
+                # Eğer ne string ne de dict ise, string'e çevir
+                content = str(content)
             
             # Mesajı oluştur
             new_message = {

@@ -6,7 +6,7 @@ import datetime
 from auth.auth import verify_password, get_password_hash, create_access_token
 from utils import get_user_details
 from Database.User_db import UserDB
-from models.User_Models import User_Login_Model, User_Create_Model
+from models.UserModels.UserAuthModels import User_Login_Model, User_Create_Model
 
 router = APIRouter()
 db = UserDB()

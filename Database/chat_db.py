@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from models.Chat_models import Chat, Message, CreateNewChat
 from exceptions import DatabaseError
 from datetime import datetime
@@ -10,13 +10,76 @@ class ChatDatabase:
     def __init__(self):
         self.chats = Database().db["chats"]
         self.messages = Database().db["messages"]
+        self.users = Database().db["users"]
         self.db = Database().db
+
+    def validate_user_ids(self, user_ids: List[str]) -> List[str]:
+        """
+        Verilen user_id listesindeki tüm kullanıcıların var olup olmadığını kontrol eder.
+        Tek bir sorguda tüm ID'leri kontrol eder.
+        
+        Args:
+            user_ids: Kontrol edilecek user_id listesi
+            
+        Returns:
+            Geçersiz (var olmayan veya silinmiş) kullanıcı ID'lerinin listesi.
+            Eğer tüm ID'ler geçerliyse boş liste döner.
+        """
+        try:
+            if not user_ids:
+                return []
+            
+            # Tüm ID'leri tek sorguda kontrol et
+            valid_users = list(self.users.find(
+                {"user_id": {"$in": user_ids}, "is_deleted": {"$ne": True}},
+                {"_id": 0, "user_id": 1}
+            ))
+            
+            valid_user_ids = {user["user_id"] for user in valid_users if user.get("user_id")}
+            invalid_ids = [uid for uid in user_ids if uid not in valid_user_ids]
+            
+            return invalid_ids
+        except Exception as e:
+            raise DatabaseError(f"Kullanıcı ID'leri kontrol edilirken hata oluştu: {str(e)}")
+
+    def _get_users_lookup(self, user_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+        """
+        Kullanıcı ID listesinden tek sorguda kullanıcı temel bilgilerini çeker
+        ve {user_id: user_doc} şeklinde bir sözlük döner.
+        """
+        try:
+            if not user_ids:
+                return {}
+
+            cursor = self.users.find(
+                {"user_id": {"$in": user_ids}, "is_deleted": {"$ne": True}},
+                {"_id": 0, "user_id": 1, "name": 1, "profile_picture": 1}
+            )
+            return {doc["user_id"]: doc for doc in cursor if doc.get("user_id")}
+        except Exception as e:
+            raise DatabaseError(f"Kullanıcı bilgileri getirilirken hata oluştu: {str(e)}")
+
+    def _build_participants_info(
+        self,
+        participants: List[str],
+        users_lookup: Dict[str, Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Katılımcı ID'leri için isim ve profil fotoğrafı bilgilerini oluşturur.
+        """
+        participants_info = []
+        for participant_id in participants:
+            user = users_lookup.get(participant_id, {})
+            participants_info.append({
+                "user_id": participant_id,
+                "name": user.get("name", "Kullanıcı"),
+                "profile_picture": user.get("profile_picture", "/default-avatar.png")
+            })
+        return participants_info
 
     def create_chat(self, chat_data: CreateNewChat) -> Chat:
         try:
-            # Zorunlu alanları doldurarak Chat nesnesini oluştur
             participants = chat_data.participants or []
-            # İlk katılımcıyı (kurucu) admin yap
             group_admin_ids = [participants[0]] if (chat_data.is_group and participants) else []
 
             chat = Chat(
@@ -32,7 +95,6 @@ class ChatDatabase:
                 group_admin_ids=group_admin_ids,
                 is_active=True
             )
-            # MongoDB'ye ekle
             self.chats.insert_one(chat.model_dump())
             return chat
         except Exception as e:
@@ -54,7 +116,9 @@ class ChatDatabase:
 
     def add_message(self, chat_id: str, message: Message):
         try:
-            self.messages.insert_one(message.dict())
+            message_dict = message.model_dump()
+            message_dict["chat_id"] = chat_id
+            self.messages.insert_one(message_dict)
             self.chats.update_one(
                 {"chat_id": chat_id},
                 {"$set": {"updated_at": datetime.now().isoformat()}}
@@ -329,13 +393,21 @@ class ChatDatabase:
             message_objects = []
             for message in messages:
                 try:
-                    # Eğer content yoksa varsayılan değerler kullan
-                    if not message.get('content'):
-                        message['content'] = {
-                            'type': 'text',
-                            'text': '',
-                            'content': ''
-                        }
+                    # Content'i düzgün formata çevir
+                    content = message.get('content', '')
+                    if isinstance(content, dict):
+                        # Eğer content dictionary ise, text kısmını al
+                        if content.get("type") == "text":
+                            content = content.get("text", "")
+                        else:
+                            # Diğer medya tipleri için content'i string'e çevir
+                            content = str(content)
+                    elif not isinstance(content, str):
+                        # Eğer ne string ne de dict ise, string'e çevir
+                        content = str(content)
+                    
+                    # Content'i güncelle
+                    message['content'] = content
                     message_objects.append(Message(**message))
                 except Exception as e:
                     print(f"Mesaj dönüştürme hatası: {str(e)}")
@@ -544,7 +616,28 @@ class ChatDatabase:
             ).skip((page - 1) * page_size).limit(page_size))
             
             # Mesajları Message nesnelerine dönüştür
-            message_objects = [Message(**message) for message in messages]
+            message_objects = []
+            for message in messages:
+                try:
+                    # Content'i düzgün formata çevir
+                    content = message.get('content', '')
+                    if isinstance(content, dict):
+                        # Eğer content dictionary ise, text kısmını al
+                        if content.get("type") == "text":
+                            content = content.get("text", "")
+                        else:
+                            # Diğer medya tipleri için content'i string'e çevir
+                            content = str(content)
+                    elif not isinstance(content, str):
+                        # Eğer ne string ne de dict ise, string'e çevir
+                        content = str(content)
+                    
+                    # Content'i güncelle
+                    message['content'] = content
+                    message_objects.append(Message(**message))
+                except Exception as e:
+                    print(f"Mesaj dönüştürme hatası: {str(e)}")
+                    continue
             
             return {
                 "messages": message_objects,
@@ -587,7 +680,28 @@ class ChatDatabase:
             ).skip((page - 1) * page_size).limit(page_size))
             
             # Sonuçları Message nesnelerine dönüştür
-            message_objects = [Message(**result) for result in results]
+            message_objects = []
+            for result in results:
+                try:
+                    # Content'i düzgün formata çevir
+                    content = result.get('content', '')
+                    if isinstance(content, dict):
+                        # Eğer content dictionary ise, text kısmını al
+                        if content.get("type") == "text":
+                            content = content.get("text", "")
+                        else:
+                            # Diğer medya tipleri için content'i string'e çevir
+                            content = str(content)
+                    elif not isinstance(content, str):
+                        # Eğer ne string ne de dict ise, string'e çevir
+                        content = str(content)
+                    
+                    # Content'i güncelle
+                    result['content'] = content
+                    message_objects.append(Message(**result))
+                except Exception as e:
+                    print(f"Mesaj dönüştürme hatası: {str(e)}")
+                    continue
             
             return {
                 "messages": message_objects,
@@ -643,7 +757,28 @@ class ChatDatabase:
             ).skip((page - 1) * page_size).limit(page_size))
             
             # Sonuçları Message nesnelerine dönüştür
-            message_objects = [Message(**result) for result in results]
+            message_objects = []
+            for result in results:
+                try:
+                    # Content'i düzgün formata çevir
+                    content = result.get('content', '')
+                    if isinstance(content, dict):
+                        # Eğer content dictionary ise, text kısmını al
+                        if content.get("type") == "text":
+                            content = content.get("text", "")
+                        else:
+                            # Diğer medya tipleri için content'i string'e çevir
+                            content = str(content)
+                    elif not isinstance(content, str):
+                        # Eğer ne string ne de dict ise, string'e çevir
+                        content = str(content)
+                    
+                    # Content'i güncelle
+                    result['content'] = content
+                    message_objects.append(Message(**result))
+                except Exception as e:
+                    print(f"Mesaj dönüştürme hatası: {str(e)}")
+                    continue
             
             return {
                 "messages": message_objects,
@@ -708,6 +843,12 @@ class ChatDatabase:
             all_chats = list(self.chats.aggregate(pipeline))
             print(f"Toplam sohbet sayısı: {len(all_chats)}")
             
+            # Katılımcı bilgileri için gerekli kullanıcıları tek seferde topla
+            participant_ids = set()
+            for chat_data in all_chats:
+                participant_ids.update(chat_data.get("participants", []))
+            participants_lookup = self._get_users_lookup(list(participant_ids))
+            
             # Son 5 sohbeti ayır
             recent_chats = all_chats[:5]
             other_chats = all_chats[5:]
@@ -740,10 +881,47 @@ class ChatDatabase:
                     print(f"Chat {chat_data['chat_id']} aktif değil, atlanıyor")
                     continue
                 
+                participants = chat_data.get("participants", [])
+                participants_info = self._build_participants_info(participants, participants_lookup)
+                
+                # Mesajları Message nesnelerine dönüştür
+                message_objects = []
+                if "messages" in chat_data and chat_data["messages"]:
+                    for msg in chat_data["messages"]:
+                        try:
+                            # Content'i düzgün formata çevir
+                            content = msg.get("content", "")
+                            if isinstance(content, dict):
+                                # Eğer content dictionary ise, text kısmını al
+                                if content.get("type") == "text":
+                                    content = content.get("text", "")
+                                else:
+                                    # Diğer medya tipleri için content'i string'e çevir
+                                    content = str(content)
+                            elif not isinstance(content, str):
+                                # Eğer ne string ne de dict ise, string'e çevir
+                                content = str(content)
+                            
+                            message = Message(
+                                message_id=msg["message_id"],
+                                sender_id=msg["sender_id"],
+                                content=content,
+                                timestamp=msg["timestamp"],
+                                status=msg.get("status", {}),
+                                read_by=msg.get("read_by", []),
+                                reply_to=msg.get("reply_to"),
+                                forward_from=msg.get("forward_from")
+                            )
+                            message_objects.append(message)
+                        except Exception as e:
+                            print(f"Mesaj dönüştürme hatası: {str(e)}")
+                            continue
+                
                 chat = Chat(
                     chat_id=chat_data["chat_id"],
-                    messages=chat_data.get("messages", []),
-                    participants=chat_data["participants"],
+                    messages=message_objects,
+                    participants=participants,
+                    participants_info=participants_info,
                     is_group=chat_data.get("is_group", False),
                     group_name=chat_data.get("group_name"),
                     group_photo_url=chat_data.get("group_photo_url"),
@@ -756,10 +934,23 @@ class ChatDatabase:
                 
                 # Son mesajı ekle
                 if "messages" in chat_data and chat_data["messages"]:
+                    # Content'i düzgün formata çevir
+                    content = chat_data["messages"][0]["content"]
+                    if isinstance(content, dict):
+                        # Eğer content dictionary ise, text kısmını al
+                        if content.get("type") == "text":
+                            content = content.get("text", "")
+                        else:
+                            # Diğer medya tipleri için content'i string'e çevir
+                            content = str(content)
+                    elif not isinstance(content, str):
+                        # Eğer ne string ne de dict ise, string'e çevir
+                        content = str(content)
+                    
                     chat.last_message = Message(
                         message_id=chat_data["messages"][0]["message_id"],
                         sender_id=chat_data["messages"][0]["sender_id"],
-                        content=chat_data["messages"][0]["content"],
+                        content=content,
                         timestamp=chat_data["messages"][0]["timestamp"],
                         status=chat_data["messages"][0].get("status", {})
                     )
@@ -771,10 +962,23 @@ class ChatDatabase:
                     )
                     
                     if last_message:
+                        # Content'i düzgün formata çevir
+                        content = last_message["content"]
+                        if isinstance(content, dict):
+                            # Eğer content dictionary ise, text kısmını al
+                            if content.get("type") == "text":
+                                content = content.get("text", "")
+                            else:
+                                # Diğer medya tipleri için content'i string'e çevir
+                                content = str(content)
+                        elif not isinstance(content, str):
+                            # Eğer ne string ne de dict ise, string'e çevir
+                            content = str(content)
+                        
                         chat.last_message = Message(
                             message_id=last_message["message_id"],
                             sender_id=last_message["sender_id"],
-                            content=last_message["content"],
+                            content=content,
                             timestamp=last_message["timestamp"],
                             status=last_message.get("status", {})
                         )
@@ -783,10 +987,23 @@ class ChatDatabase:
                 if chat_data in recent_chats and "messages" in chat_data:
                     chat.messages = []
                     for msg in chat_data["messages"]:
+                        # Content'i düzgün formata çevir
+                        content = msg["content"]
+                        if isinstance(content, dict):
+                            # Eğer content dictionary ise, text kısmını al
+                            if content.get("type") == "text":
+                                content = content.get("text", "")
+                            else:
+                                # Diğer medya tipleri için content'i string'e çevir
+                                content = str(content)
+                        elif not isinstance(content, str):
+                            # Eğer ne string ne de dict ise, string'e çevir
+                            content = str(content)
+                        
                         message = Message(
                             message_id=msg["message_id"],
                             sender_id=msg["sender_id"],
-                            content=msg["content"],
+                            content=content,
                             timestamp=msg["timestamp"],
                             status=msg.get("status", {})
                         )

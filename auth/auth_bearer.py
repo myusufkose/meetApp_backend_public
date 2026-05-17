@@ -1,11 +1,8 @@
 # app/auth/auth_bearer.py
-
 from fastapi import Request, HTTPException
 import time
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-
 from auth.auth import decode_jwt
-
 
 class JWTBearer(HTTPBearer):
     def __init__(self, auto_error: bool = True):

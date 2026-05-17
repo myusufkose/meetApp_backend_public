@@ -1,11 +1,10 @@
-from uu import Error
 from Database.User_db import UserDB
-from fastapi import APIRouter, Body, Depends, HTTPException, status
+from fastapi import APIRouter, Body, Depends, HTTPException
 from auth.auth_bearer import JWTBearer
-from auth.auth import sign_jwt, decode_jwt, hash_password, verify_password
-from models.User_Models import User_Create_Model, User_Login_Model, User_Model, Friend_Request_Model, Friend_Request_Status
-from exceptions import AuthenticationError, DatabaseError, NotFoundError, DuplicateError
-from pymongo.errors import DuplicateKeyError
+from auth.auth import sign_jwt, hash_password, verify_password
+from models.UserModels.UserAuthModels import User_Create_Model, User_Login_Model
+from models.UserModels.GeneralUserModels import User_Model, Friend_Request_Model, Friend_Request_Status, User_Profile_Model
+from exceptions import DatabaseError, NotFoundError
 import uuid
 import datetime
 from websocket_manager import get_manager
@@ -118,8 +117,7 @@ async def get_my_info(current_user: dict = Depends(JWTBearer())):
         current_user_email = current_user["email"]
         
         # Kullanıcı bilgilerini getir
-        user_details = db.get_user_by_email(current_user_email)
-        user_details.pop("password_hash", None)
+        user_details = db.get_detailed_user_by_email(current_user_email)
         return {
             "success": True,
             "message": "Kullanıcı bilgileri başarıyla getirildi",
@@ -136,27 +134,15 @@ async def get_my_info(current_user: dict = Depends(JWTBearer())):
 @router.get("/user/profile/{user_id}", tags=["users"])
 async def get_user_profile(user_id: str, current_user: dict = Depends(JWTBearer())):
     try:
-        # Kullanıcıyı bul
-        users = db.get_all_users()
-        user = None
-        for u in users:
-            if u["user_id"] == user_id and not u.get("is_deleted", False):
-                user = u
-                break
+        user_profile = db.get_user_profile(user_id)
         
-        if not user:
+        if not user_profile:
             raise NotFoundError("Kullanıcı bulunamadı")
-        user.pop("password_hash", None)
-        user.pop("created_at", None)
-        user.pop("updated_at", None)
-        user.pop("is_deleted", None)
-        user.pop("friend_requests_rejected", None)
-        user.pop("friend_requests_sent", None)
-        user.pop("friend_requests_received", None)
+        
         return {
             "success": True,
             "message": "Kullanıcı profili başarıyla getirildi",
-            "data": user
+            "data": user_profile
         }
     except NotFoundError:
         raise
